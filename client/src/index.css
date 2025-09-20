@@ -1,0 +1,113 @@
+@import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600;700&display=swap');
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  --background: hsl(0 0% 0%);
+  --foreground: hsl(0 0% 95%);
+  --card: hsl(0 0% 6%);
+  --card-foreground: hsl(0 0% 95%);
+  --popover: hsl(0 0% 6%);
+  --popover-foreground: hsl(0 0% 95%);
+  --primary: hsl(138 100% 51%);
+  --primary-foreground: hsl(0 0% 0%);
+  --secondary: hsl(135 93% 55%);
+  --secondary-foreground: hsl(0 0% 0%);
+  --muted: hsl(0 0% 16%);
+  --muted-foreground: hsl(0 0% 65%);
+  --accent: hsl(138 100% 51%);
+  --accent-foreground: hsl(0 0% 0%);
+  --destructive: hsl(356 90% 54%);
+  --destructive-foreground: hsl(0 0% 100%);
+  --border: hsl(0 0% 20%);
+  --input: hsl(0 0% 12%);
+  --ring: hsl(138 100% 51%);
+  --chart-1: hsl(138 100% 51%);
+  --chart-2: hsl(159 100% 36%);
+  --chart-3: hsl(42 93% 56%);
+  --chart-4: hsl(147 79% 42%);
+  --chart-5: hsl(341 75% 51%);
+  --sidebar: hsl(0 0% 6%);
+  --sidebar-foreground: hsl(0 0% 95%);
+  --sidebar-primary: hsl(138 100% 51%);
+  --sidebar-primary-foreground: hsl(0 0% 0%);
+  --sidebar-accent: hsl(0 0% 16%);
+  --sidebar-accent-foreground: hsl(138 100% 51%);
+  --sidebar-border: hsl(0 0% 20%);
+  --sidebar-ring: hsl(138 100% 51%);
+  --font-sans: "Inter", system-ui, sans-serif;
+  --font-serif: "Georgia", serif;
+  --font-mono: "JetBrains Mono", "Fira Code", monospace;
+  --radius: 0.5rem;
+  --shadow-2xs: 0px 2px 0px 0px hsl(138 100% 51% / 0.00);
+  --shadow-xs: 0px 2px 0px 0px hsl(138 100% 51% / 0.00);
+  --shadow-sm: 0px 2px 0px 0px hsl(138 100% 51% / 0.00), 0px 1px 2px -1px hsl(138 100% 51% / 0.00);
+  --shadow: 0px 2px 0px 0px hsl(138 100% 51% / 0.00), 0px 1px 2px -1px hsl(138 100% 51% / 0.00);
+  --shadow-md: 0px 2px 0px 0px hsl(138 100% 51% / 0.00), 0px 2px 4px -1px hsl(138 100% 51% / 0.00);
+  --shadow-lg: 0px 2px 0px 0px hsl(138 100% 51% / 0.00), 0px 4px 6px -1px hsl(138 100% 51% / 0.00);
+  --shadow-xl: 0px 2px 0px 0px hsl(138 100% 51% / 0.00), 0px 8px 10px -1px hsl(138 100% 51% / 0.00);
+  --shadow-2xl: 0px 2px 0px 0px hsl(138 100% 51% / 0.00);
+  --tracking-normal: 0em;
+  --spacing: 0.25rem;
+}
+
+@layer base {
+  * {
+    @apply border-border;
+  }
+
+  body {
+    @apply font-mono antialiased bg-background text-foreground;
+  }
+}
+
+@layer components {
+  .neon-glow {
+    box-shadow: 0 0 5px var(--primary), 0 0 10px var(--primary), 0 0 15px var(--primary);
+  }
+  
+  .neon-glow-subtle {
+    box-shadow: 0 0 3px rgba(0, 255, 102, 0.3);
+  }
+  
+  .neon-border {
+    border: 1px solid var(--primary);
+    box-shadow: 0 0 5px rgba(0, 255, 102, 0.3);
+  }
+  
+  .terminal-cursor::after {
+    content: '_';
+    animation: blink 1s infinite;
+    color: var(--primary);
+  }
+  
+  .hover-glow:hover {
+    box-shadow: 0 0 8px rgba(0, 255, 102, 0.4);
+    transition: box-shadow 0.3s ease;
+  }
+
+  .gradient-text {
+    background: linear-gradient(135deg, #00FF66, #00e676);
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+    background-clip: text;
+  }
+}
+
+@layer utilities {
+  @keyframes blink {
+    0%, 50% { opacity: 1; }
+    51%, 100% { opacity: 0; }
+  }
+  
+  @keyframes pulse-neon {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.7; }
+  }
+  
+  .pulse-neon {
+    animation: pulse-neon 2s infinite;
+  }
+}

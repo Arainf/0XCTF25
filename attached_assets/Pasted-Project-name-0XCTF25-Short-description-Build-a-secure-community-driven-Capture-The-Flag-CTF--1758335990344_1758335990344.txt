@@ -1,0 +1,119 @@
+Project name: 0XCTF25
+
+Short description:
+Build a secure, community-driven Capture-The-Flag (CTF) website where every user is a Player and may also be a Challenge Creator. Players can create challenges (with artifacts, flags, hints), publish them for others to solve, and compete on leaderboards. Theme: minimalist black + neon green with subtle neon animations.
+
+Core idea & roles
+
+Single role: Player.
+
+Any Player can: register, create/edit/delete their own challenges, publish/unpublish challenges, and solve challenges created by others.
+
+The platform still supports site moderation tools (optional) for takedown/reporting, but moderators are not a separate primary role—they’re ops-level and optional.
+
+Required Features
+Authentication & Accounts
+
+Secure signup/login (email + password). Passwords hashed with bcrypt.
+
+Role: Player (with ownership metadata for created challenges).
+
+Sessions via JWT or secure cookie + refresh tokens; include CSRF protection for non-GET requests.
+
+Player (Creator + Solver) Capabilities
+
+Create challenge: title, category, full description (Markdown), artifacts (pcap, binaries, images), hints (tiered), difficulty, score value, canonical flag (stored hashed).
+
+Edit/delete own challenges. Publish/unpublish visibility toggle.
+
+Browse/search/sort challenges (category, difficulty, creator, solved/unsolved).
+
+Submit flags; get immediate feedback. Successful solves update user score & leaderboards.
+
+View profile: created challenges, solved list, badges, points, solve history.
+
+Report abuse or request takedown for a challenge (flag for moderator review).
+
+Rankings & Scoring
+
+Points based on difficulty (configurable). Tie-breaker is earliest solve time.
+
+Per-challenge ranking (who solved, when) and global leaderboard.
+
+Optional dynamic scoring (points decay as more people solve) — configurable per challenge.
+
+Anti-cheat & Robustness (must-have)
+
+Rate-limited flag submissions per-account and per-IP (e.g., 10/min per account, 30/min per IP), with burst allowances and exponential backoff. Use Redis to track counters. Temporarily lock and notify on suspicious spikes. Log all attempts (timestamp, IP, UA, challenge id, result).
+
+Hash flags (salt + strong hash) — never store plaintext flags.
+
+Validate & sanitize all inputs (prevent XSS/SQLi). Use prepared statements/ORM.
+
+Malware scan artifacts on upload (or at least quarantine + manual review before publishing if you can’t auto-scan).
+
+Use HTTPS, CSP, HSTS, secure cookies. Optional 2FA for high-trust creator accounts.
+
+Engagement & Fun (added)
+
+Achievements & badges: First Blood, Speedrun, No-Hint Hero, Creator Popularity (challenge solved N times), Streaks. Pop-up animation on unlock.
+
+Hint economy: creators may set hint cost (deduct player points to view) or penalty. Track hint usage.
+
+Creator stats: each creator sees solves count, average solve time, ratings (optional), reports.
+
+Post-solve options: allow solvers to leave optional short feedback/rating for challenge quality (or star rating). Moderation tools to prevent abuse.
+
+UX / Theme (black + neon green + animations)
+
+Black background (#000), neon green accent (#00e676 / #00FF66). Monospace headings (JetBrains Mono / Fira Code).
+
+Subtle neon glow effects on hover, terminal-style typewriter header effect for challenge pages, toast animations for achievements (slide + neon pulse).
+
+Accessibility: high-contrast text, ARIA labels, option to disable animations.
+
+Tech Stack — recommended (buildable & modern)
+
+Frontend: Next.js (React) + TailwindCSS. Use CSS variables for neon tokens.
+
+Backend: Node.js + Express (or NestJS) — RESTful API. (Django REST as an alternative.)
+
+Database: PostgreSQL.
+
+Rate-limit & cache: Redis (counters, pub/sub for realtime).
+
+File storage: Supabase Storage or AWS S3 (serve artifacts via signed URLs).
+
+Realtime leaderboards: Socket.IO or Supabase Realtime.
+
+Auth: NextAuth.js (Next.js) or JWT + secure cookies.
+
+Deployment: Frontend on Vercel; backend on Render / Fly / DigitalOcean; or go full Supabase for simple ops. Use Docker for portability.
+
+Data integrity & schema notes (brief)
+
+Challenge table: id, creator_id, title, slug, description (md), difficulty, score, published (bool), created_at, updated_at.
+
+Flag storage: store hash + per-challenge salt; do NOT expose salts publicly.
+
+Submission log: user_id, challenge_id, attempt_hash, result, ip, user_agent, timestamp.
+
+Achievements table, Hint usage logs, Reports table for takedowns.
+
+Developer deliverables
+
+Full-stack scaffold (Next.js frontend + Express backend) with env examples and docker-compose (web, db, redis).
+
+Auth flow + Player profile pages.
+
+Player challenge creation UI + publish management.
+
+Flag submission + hashed-check logic + rate-limiter (Redis).
+
+Leaderboards (global & per-challenge) via WebSocket updates.
+
+Badge/achievement system + unlock animations.
+
+Neon dark theme + CSS animations.
+
+README with run, deploy, and security notes; sample seed data.

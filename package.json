@@ -5,8 +5,11 @@
   "license": "MIT",
   "scripts": {
     "dev": "dotenv -e .env tsx server/index.ts",
+    "dev:go": "dotenv -e .env go run main.go",
     "build": "vite build && esbuild server/index.ts --platform=node --packages=external --bundle --format=esm --outdir=dist",
+    "build:go": "vite build && go build -o bin/server main.go",
     "start": "dotenv -e .env node dist/index.js",
+    "start:go": "dotenv -e .env ./bin/server",
     "check": "tsc",
     "db:push": "dotenv -e .env drizzle-kit push"
   },

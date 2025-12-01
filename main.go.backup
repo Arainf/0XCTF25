@@ -1,0 +1,1142 @@
+package main
+
+import (
+    "context"
+    "encoding/json"
+    "fmt"
+    "log"
+    "net"
+    "net/http"
+    "os"
+    "os/signal"
+    "path/filepath"
+    "strconv"
+    "strings"
+    "syscall"
+    "time"
+)
+
+const defaultPort = "5000"
+
+var (
+    uploadDir = "uploads"
+    publicDir = "dist/public"
+    pidFile   = ".server.pid"
+)
+
+func init() { _ = os.MkdirAll(uploadDir, 0755) }
+
+func main() {
+    portStr := os.Getenv("PORT")
+    if portStr == "" { portStr = defaultPort }
+
+    if os.Getenv("DATABASE_URL") == "" { log.Println("warning: DATABASE_URL is not set") }
+    if os.Getenv("SESSION_SECRET") == "" { log.Println("warning: SESSION_SECRET is not set") }
+
+    mux := http.NewServeMux()
+    mux.HandleFunc("/api/challenges", handleChallenges)
+    mux.HandleFunc("/api/challenges/", handleChallengeByID)
+    mux.HandleFunc("/api/users/", handleUserByID)
+    mux.HandleFunc("/api/leaderboard", handleGetLeaderboard)
+    mux.HandleFunc("/uploads/", handleDownloadFile)
+    mux.HandleFunc("/api/register", handleRegister)
+    mux.HandleFunc("/api/login", handleLogin)
+    mux.HandleFunc("/api/logout", handleLogout)
+    mux.HandleFunc("/api/me", handleGetMe)
+    mux.HandleFunc("/", serveStaticOrNotFound)
+
+    srv := &http.Server{Handler: loggingMiddleware(mux)}
+
+    basePort, err := strconv.Atoi(portStr)
+    if err != nil || basePort <= 0 { basePort, _ = strconv.Atoi(defaultPort) }
+    const maxAttempts = 10
+    var ln net.Listener
+    var listenPort int
+    for i := 0; i < maxAttempts; i++ {
+        tryPort := basePort + i
+        addr := fmt.Sprintf(":%d", tryPort)
+        ln, err = net.Listen("tcp", addr)
+        if err == nil { listenPort = tryPort; break }
+        if strings.Contains(err.Error(), "address already in use") { continue }
+        log.Fatalf("failed to listen on %s: %v", addr, err)
+    }
+    if ln == nil { log.Fatalf("unable to bind to any port starting at %d", basePort) }
+
+    if err := writePID(pidFile); err != nil { log.Printf("warning: failed to write pid file: %v", err) }
+
+    serverErr := make(chan error, 1)
+    go func() {
+        fmt.Printf("serving on http://localhost:%d\n", listenPort)
+        if err := srv.Serve(ln); err != nil && err != http.ErrServerClosed { serverErr <- err }
+    }()
+
+    stop := make(chan os.Signal, 1)
+    signal.Notify(stop, os.Interrupt, syscall.SIGTERM)
+
+    select {
+    case sig := <-stop:
+        log.Printf("signal received: %v, shutting down", sig)
+    case err := <-serverErr:
+        log.Fatalf("server error: %v", err)
+    }
+
+    ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+    defer cancel()
+    if err := srv.Shutdown(ctx); err != nil { log.Fatalf("graceful shutdown failed: %v", err) }
+
+    if err := removePID(pidFile); err != nil { log.Printf("warning: failed to remove pid file: %v", err) }
+    log.Println("server stopped")
+}
+
+func writePID(path string) error { pid := os.Getpid(); return os.WriteFile(path, []byte(strconv.Itoa(pid)), 0644) }
+func removePID(path string) error { _ = os.Remove(path); return nil }
+
+func loggingMiddleware(next http.Handler) http.Handler {
+    return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+        start := time.Now()
+        path := r.URL.Path
+        rec := &responseRecorder{ResponseWriter: w, statusCode: 200, body: &strings.Builder{}}
+        next.ServeHTTP(rec, r)
+        dur := time.Since(start).Milliseconds()
+        if strings.HasPrefix(path, "/api") {
+            line := fmt.Sprintf("%s %s %d in %dms", r.Method, path, rec.statusCode, dur)
+            if rec.body.Len() > 0 && rec.statusCode < 400 { b := rec.body.String(); if len(b) > 200 { b = b[:200] + "…" }; line += fmt.Sprintf(" :: %s", b) }
+            log.Println(line)
+        }
+    })
+}
+
+type responseRecorder struct { http.ResponseWriter; statusCode int; body *strings.Builder }
+func (r *responseRecorder) WriteHeader(s int) { r.statusCode = s; r.ResponseWriter.WriteHeader(s) }
+func (r *responseRecorder) Write(b []byte) (int, error) { r.body.Write(b); return r.ResponseWriter.Write(b) }
+
+func handleChallenges(w http.ResponseWriter, r *http.Request) {
+    switch r.Method {
+    case http.MethodGet: w.Header().Set("Content-Type","application/json"); json.NewEncoder(w).Encode([]interface{}{})
+    case http.MethodPost: w.Header().Set("Content-Type","application/json"); w.WriteHeader(http.StatusCreated); json.NewEncoder(w).Encode(map[string]string{"message":"created"})
+    default: http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+    }
+}
+func handleChallengeByID(w http.ResponseWriter, r *http.Request) { id := strings.TrimPrefix(r.URL.Path, "/api/challenges/"); if id == "" { http.NotFound(w,r); return }; if strings.HasSuffix(id, "/submit") { id = strings.TrimSuffix(id, "/submit"); if r.Method == http.MethodPost { w.Header().Set("Content-Type","application/json"); json.NewEncoder(w).Encode(map[string]any{"correct":false}); return } }; w.Header().Set("Content-Type","application/json"); json.NewEncoder(w).Encode(map[string]string{"id":id}) }
+func handleUserByID(w http.ResponseWriter, r *http.Request) { id := strings.TrimPrefix(r.URL.Path, "/api/users/"); w.Header().Set("Content-Type","application/json"); json.NewEncoder(w).Encode(map[string]string{"id":id}) }
+func handleGetLeaderboard(w http.ResponseWriter, r *http.Request) { w.Header().Set("Content-Type","application/json"); json.NewEncoder(w).Encode([]interface{}{}) }
+func handleDownloadFile(w http.ResponseWriter, r *http.Request) { name := strings.TrimPrefix(r.URL.Path, "/uploads/"); if strings.Contains(name, "..") || strings.Contains(name, "/") { http.Error(w, "forbidden", http.StatusForbidden); return }; http.ServeFile(w, r, filepath.Join(uploadDir, name)) }
+func handleRegister(w http.ResponseWriter, r *http.Request) { w.Header().Set("Content-Type","application/json"); w.WriteHeader(http.StatusCreated); json.NewEncoder(w).Encode(map[string]string{"message":"registered"}) }
+func handleLogin(w http.ResponseWriter, r *http.Request) { w.Header().Set("Content-Type","application/json"); json.NewEncoder(w).Encode(map[string]string{"message":"logged-in"}) }
+func handleLogout(w http.ResponseWriter, r *http.Request) { w.WriteHeader(http.StatusOK) }
+func handleGetMe(w http.ResponseWriter, r *http.Request) { http.Error(w, "unauthorized", http.StatusUnauthorized) }
+
+func serveStaticOrNotFound(w http.ResponseWriter, r *http.Request) {
+    p := r.URL.Path
+    if strings.HasPrefix(p, "/api/") || strings.HasPrefix(p, "/uploads/") { http.NotFound(w,r); return }
+    rel := strings.TrimPrefix(p, "/"); if rel == "" { rel = "index.html" }
+    fp := filepath.Join(publicDir, filepath.Clean(rel))
+    if stat, err := os.Stat(fp); err == nil && !stat.IsDir() { http.ServeFile(w, r, fp); return }
+    idx := filepath.Join(publicDir, "index.html")
+    if stat, err := os.Stat(idx); err == nil && !stat.IsDir() { http.ServeFile(w, r, idx); return }
+    http.NotFound(w, r)
+}
+
+func isAuthenticated(r *http.Request) bool { return false }
+
+package main
+
+import (
+    "context"
+    "encoding/json"
+    "fmt"
+    "io"
+    "log"
+    "net"
+    "net/http"
+    "os"
+    "os/signal"
+    "path/filepath"
+    "strconv"
+    "strings"
+    "syscall"
+    "time"
+)
+
+const (
+    defaultPort = "5000"
+)
+
+var (
+    uploadDir = "uploads"
+    publicDir = "dist/public"
+    pidFile   = ".server.pid"
+)
+
+func init() {
+    _ = os.MkdirAll(uploadDir, 0755)
+}
+
+func main() {
+    // Determine base port
+    portStr := os.Getenv("PORT")
+    if portStr == "" {
+        portStr = defaultPort
+    }
+
+    // Warn if key env vars missing (development-friendly)
+    if os.Getenv("DATABASE_URL") == "" {
+        log.Println("warning: DATABASE_URL is not set")
+    }
+    if os.Getenv("SESSION_SECRET") == "" {
+        log.Println("warning: SESSION_SECRET is not set")
+    }
+
+    // mux & routes
+    mux := http.NewServeMux()
+
+    mux.HandleFunc("/api/challenges", handleChallenges)
+    mux.HandleFunc("/api/challenges/", handleChallengeByID) // supports /api/challenges/{id} and /api/challenges/{id}/submit
+    mux.HandleFunc("/api/users/", handleUserByID)
+    mux.HandleFunc("/api/leaderboard", handleGetLeaderboard)
+    mux.HandleFunc("/uploads/", handleDownloadFile)
+
+    mux.HandleFunc("/api/register", handleRegister)
+    mux.HandleFunc("/api/login", handleLogin)
+    mux.HandleFunc("/api/logout", handleLogout)
+    mux.HandleFunc("/api/me", handleGetMe)
+
+    mux.HandleFunc("/", serveStaticOrNotFound)
+
+    srv := &http.Server{Handler: loggingMiddleware(mux)}
+
+    // Try to bind starting at portStr, fallback to next ports up to attempts
+    basePort, err := strconv.Atoi(portStr)
+    if err != nil || basePort <= 0 {
+        basePort, _ = strconv.Atoi(defaultPort)
+    }
+    const maxAttempts = 10
+    var ln net.Listener
+    var listenPort int
+    for i := 0; i < maxAttempts; i++ {
+        tryPort := basePort + i
+        addr := fmt.Sprintf(":%d", tryPort)
+        ln, err = net.Listen("tcp", addr)
+        if err == nil {
+            listenPort = tryPort
+            break
+        }
+        if strings.Contains(err.Error(), "address already in use") {
+            continue
+        }
+        log.Fatalf("failed to listen on %s: %v", addr, err)
+    }
+    if ln == nil {
+        log.Fatalf("unable to bind to any port starting at %d", basePort)
+    }
+
+    if err := writePID(pidFile); err != nil {
+        log.Printf("warning: failed to write pid file: %v", err)
+    }
+
+    serverErr := make(chan error, 1)
+    go func() {
+        fmt.Printf("serving on http://localhost:%d\n", listenPort)
+        if err := srv.Serve(ln); err != nil && err != http.ErrServerClosed {
+            serverErr <- err
+        }
+    }()
+
+    stop := make(chan os.Signal, 1)
+    signal.Notify(stop, os.Interrupt, syscall.SIGTERM)
+
+    select {
+    case sig := <-stop:
+        log.Printf("signal received: %v, shutting down", sig)
+    case err := <-serverErr:
+        log.Fatalf("server error: %v", err)
+    }
+
+    ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+    defer cancel()
+    if err := srv.Shutdown(ctx); err != nil {
+        log.Fatalf("graceful shutdown failed: %v", err)
+    }
+
+    if err := removePID(pidFile); err != nil {
+        log.Printf("warning: failed to remove pid file: %v", err)
+    }
+
+    log.Println("server stopped")
+}
+
+// writePID writes current pid to file (best-effort)
+func writePID(path string) error {
+    pid := os.Getpid()
+    return os.WriteFile(path, []byte(strconv.Itoa(pid)), 0644)
+}
+
+func removePID(path string) error {
+    _ = os.Remove(path)
+    return nil
+}
+
+// --- Middleware + utilities ---
+func loggingMiddleware(next http.Handler) http.Handler {
+    return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+        start := time.Now()
+        path := r.URL.Path
+
+        recorder := &responseRecorder{ResponseWriter: w, statusCode: 200, body: &strings.Builder{}}
+        next.ServeHTTP(recorder, r)
+
+        duration := time.Since(start).Milliseconds()
+        if strings.HasPrefix(path, "/api") {
+            logLine := fmt.Sprintf("%s %s %d in %dms", r.Method, path, recorder.statusCode, duration)
+            if recorder.body.Len() > 0 && recorder.statusCode < 400 {
+                bodyStr := recorder.body.String()
+                if len(bodyStr) > 200 {
+                    bodyStr = bodyStr[:200] + "…"
+                }
+                logLine += fmt.Sprintf(" :: %s", bodyStr)
+            }
+            log.Println(logLine)
+        }
+    })
+}
+
+type responseRecorder struct {
+    http.ResponseWriter
+    statusCode int
+    body       *strings.Builder
+}
+
+func (r *responseRecorder) WriteHeader(statusCode int) {
+    r.statusCode = statusCode
+    r.ResponseWriter.WriteHeader(statusCode)
+}
+
+func (r *responseRecorder) Write(b []byte) (int, error) {
+    r.body.Write(b)
+    return r.ResponseWriter.Write(b)
+}
+
+// --- Handlers (stubs) ---
+func handleChallenges(w http.ResponseWriter, r *http.Request) {
+    switch r.Method {
+    case http.MethodGet:
+        w.Header().Set("Content-Type", "application/json")
+        json.NewEncoder(w).Encode([]interface{}{})
+    case http.MethodPost:
+        w.Header().Set("Content-Type", "application/json")
+        w.WriteHeader(http.StatusCreated)
+        json.NewEncoder(w).Encode(map[string]string{"message": "Challenge created"})
+    default:
+        http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+    }
+}
+
+func handleChallengeByID(w http.ResponseWriter, r *http.Request) {
+    id := strings.TrimPrefix(r.URL.Path, "/api/challenges/")
+    if id == "" {
+        http.NotFound(w, r)
+        return
+    }
+    if strings.HasSuffix(id, "/submit") {
+        id = strings.TrimSuffix(id, "/submit")
+        if r.Method == http.MethodPost {
+            w.Header().Set("Content-Type", "application/json")
+            json.NewEncoder(w).Encode(map[string]any{"correct": false, "message": "Incorrect flag"})
+            return
+        }
+    }
+
+    switch r.Method {
+    case http.MethodGet:
+        w.Header().Set("Content-Type", "application/json")
+        json.NewEncoder(w).Encode(map[string]string{"id": id})
+    case http.MethodPut:
+        w.Header().Set("Content-Type", "application/json")
+        json.NewEncoder(w).Encode(map[string]string{"id": id, "message": "updated"})
+    case http.MethodDelete:
+        w.WriteHeader(http.StatusNoContent)
+    default:
+        http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+    }
+}
+
+func handleUserByID(w http.ResponseWriter, r *http.Request) {
+    id := strings.TrimPrefix(r.URL.Path, "/api/users/")
+    if id == "" {
+        http.NotFound(w, r)
+        return
+    }
+    w.Header().Set("Content-Type", "application/json")
+    json.NewEncoder(w).Encode(map[string]string{"id": id})
+}
+
+func handleGetLeaderboard(w http.ResponseWriter, r *http.Request) {
+    w.Header().Set("Content-Type", "application/json")
+    json.NewEncoder(w).Encode([]interface{}{})
+}
+
+func handleDownloadFile(w http.ResponseWriter, r *http.Request) {
+    name := strings.TrimPrefix(r.URL.Path, "/uploads/")
+    if strings.Contains(name, "..") || strings.Contains(name, "/") {
+        http.Error(w, "forbidden", http.StatusForbidden)
+        return
+    }
+    fp := filepath.Join(uploadDir, name)
+    http.ServeFile(w, r, fp)
+}
+
+func handleRegister(w http.ResponseWriter, r *http.Request) {
+    w.Header().Set("Content-Type", "application/json")
+    w.WriteHeader(http.StatusCreated)
+    json.NewEncoder(w).Encode(map[string]string{"message": "registered"})
+}
+
+func handleLogin(w http.ResponseWriter, r *http.Request) {
+    w.Header().Set("Content-Type", "application/json")
+    json.NewEncoder(w).Encode(map[string]string{"message": "logged-in"})
+}
+
+func handleLogout(w http.ResponseWriter, r *http.Request) {
+    w.WriteHeader(http.StatusOK)
+}
+
+func handleGetMe(w http.ResponseWriter, r *http.Request) {
+    http.Error(w, "unauthorized", http.StatusUnauthorized)
+}
+
+// serve static files or index.html for client-side routing
+func serveStaticOrNotFound(w http.ResponseWriter, r *http.Request) {
+    p := r.URL.Path
+    if strings.HasPrefix(p, "/api/") || strings.HasPrefix(p, "/uploads/") {
+        http.NotFound(w, r)
+        return
+    }
+
+    rel := strings.TrimPrefix(p, "/")
+    if rel == "" {
+        rel = "index.html"
+    }
+
+    fp := filepath.Join(publicDir, filepath.Clean(rel))
+    if stat, err := os.Stat(fp); err == nil && !stat.IsDir() {
+        http.ServeFile(w, r, fp)
+        return
+    }
+
+    // fallback to index.html for client-side routing
+    index := filepath.Join(publicDir, "index.html")
+    if stat, err := os.Stat(index); err == nil && !stat.IsDir() {
+        http.ServeFile(w, r, index)
+        return
+    }
+
+    http.NotFound(w, r)
+}
+
+// isAuthenticated placeholder
+func isAuthenticated(r *http.Request) bool { return false }
+package main
+
+import (
+    "context"
+    "encoding/json"
+    "fmt"
+    "io"
+    "log"
+    "net"
+    "net/http"
+    "os"
+    "os/signal"
+    "path/filepath"
+    "strconv"
+    "strings"
+    "syscall"
+    "time"
+)
+
+const (
+    defaultPort = "5000"
+)
+
+var (
+    uploadDir = "uploads"
+    publicDir = "dist/public"
+    pidFile   = ".server.pid"
+)
+
+func init() {
+    _ = os.MkdirAll(uploadDir, 0755)
+}
+
+func main() {
+    port := os.Getenv("PORT")
+    if port == "" {
+        port = defaultPort
+    }
+
+    // Validate environment (warn, don't abort in dev if missing)
+    if os.Getenv("DATABASE_URL") == "" {
+        log.Println("warning: DATABASE_URL is not set")
+    }
+    if os.Getenv("SESSION_SECRET") == "" {
+        log.Println("warning: SESSION_SECRET is not set")
+    }
+
+    mux := http.NewServeMux()
+
+    // API routes
+    mux.HandleFunc("/api/challenges", handleChallenges)
+    mux.HandleFunc("/api/challenges/", handleChallengeByID) // trailing slash for id
+    mux.HandleFunc("/api/users/", handleUserByID)
+    mux.HandleFunc("/api/leaderboard", handleGetLeaderboard)
+    mux.HandleFunc("/uploads/", handleDownloadFile)
+
+    // Auth stubs
+    mux.HandleFunc("/api/register", handleRegister)
+    mux.HandleFunc("/api/login", handleLogin)
+    mux.HandleFunc("/api/logout", handleLogout)
+    mux.HandleFunc("/api/me", handleGetMe)
+
+    // Static / client
+    mux.HandleFunc("/", serveStaticOrNotFound)
+
+    srv := &http.Server{Handler: loggingMiddleware(mux)}
+
+    // Try to bind, falling back to next ports
+    maxAttempts := 10
+    basePort, _ := strconv.Atoi(port)
+    var ln net.Listener
+    var listenPort int
+    var err error
+
+    for i := 0; i < maxAttempts; i++ {
+        attempt := basePort + i
+        addr := fmt.Sprintf(":%d", attempt)
+        ln, err = net.Listen("tcp", addr)
+        if err == nil {
+            listenPort = attempt
+            break
+        }
+        if strings.Contains(err.Error(), "address already in use") {
+            continue
+        }
+        log.Fatalf("failed to listen on %s: %v", addr, err)
+    }
+
+    if ln == nil {
+        log.Fatalf("unable to bind to any port starting at %s", port)
+    }
+
+    if err := writePID(pidFile); err != nil {
+        log.Printf("warning: failed to write pid file: %v", err)
+    }
+
+    serverErr := make(chan error, 1)
+    go func() {
+        fmt.Printf("serving on http://localhost:%d\n", listenPort)
+        if err := srv.Serve(ln); err != nil && err != http.ErrServerClosed {
+            serverErr <- err
+        }
+    }()
+
+    stop := make(chan os.Signal, 1)
+    signal.Notify(stop, os.Interrupt, syscall.SIGTERM)
+
+    select {
+    case sig := <-stop:
+        log.Printf("signal received: %v, shutting down", sig)
+    case err := <-serverErr:
+        log.Fatalf("server error: %v", err)
+    }
+
+    ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+    defer cancel()
+    if err := srv.Shutdown(ctx); err != nil {
+        log.Fatalf("graceful shutdown failed: %v", err)
+    }
+
+    if err := removePID(pidFile); err != nil {
+        log.Printf("warning: failed to remove pid file: %v", err)
+    }
+
+    log.Println("server stopped")
+}
+
+// writePID writes current pid to file (best-effort)
+func writePID(path string) error {
+    pid := os.Getpid()
+    return os.WriteFile(path, []byte(strconv.Itoa(pid)), 0644)
+}
+
+func removePID(path string) error {
+    return os.Remove(path)
+}
+
+// --- Middleware + Utilities ---
+func loggingMiddleware(next http.Handler) http.Handler {
+    return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+        start := time.Now()
+        path := r.URL.Path
+
+        recorder := &responseRecorder{ResponseWriter: w, body: &strings.Builder{}}
+        next.ServeHTTP(recorder, r)
+
+        duration := time.Since(start).Milliseconds()
+        if strings.HasPrefix(path, "/api") {
+            logLine := fmt.Sprintf("%s %s %d in %dms", r.Method, path, recorder.statusCode, duration)
+            if recorder.body.Len() > 0 && recorder.statusCode < 400 {
+                bodyStr := recorder.body.String()
+                if len(bodyStr) > 200 {
+                    bodyStr = bodyStr[:200] + "…"
+                }
+                logLine += fmt.Sprintf(" :: %s", bodyStr)
+            }
+            log.Println(logLine)
+        }
+    })
+}
+
+type responseRecorder struct {
+    http.ResponseWriter
+    statusCode int
+    body       *strings.Builder
+}
+
+func (r *responseRecorder) WriteHeader(statusCode int) {
+    r.statusCode = statusCode
+    r.ResponseWriter.WriteHeader(statusCode)
+}
+
+func (r *responseRecorder) Write(b []byte) (int, error) {
+    r.body.Write(b)
+    return r.ResponseWriter.Write(b)
+}
+
+// --- Handlers (stubs) ---
+func handleChallenges(w http.ResponseWriter, r *http.Request) {
+    if r.Method == http.MethodGet {
+        w.Header().Set("Content-Type", "application/json")
+        json.NewEncoder(w).Encode([]interface{}{})
+        return
+    }
+    if r.Method == http.MethodPost {
+        w.Header().Set("Content-Type", "application/json")
+        w.WriteHeader(http.StatusCreated)
+        json.NewEncoder(w).Encode(map[string]string{"message": "Challenge created"})
+        return
+    }
+    http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+}
+
+func handleChallengeByID(w http.ResponseWriter, r *http.Request) {
+    id := strings.TrimPrefix(r.URL.Path, "/api/challenges/")
+    if id == "" {
+        http.NotFound(w, r)
+        return
+    }
+    switch r.Method {
+    case http.MethodGet:
+        w.Header().Set("Content-Type", "application/json")
+        json.NewEncoder(w).Encode(map[string]string{"id": id, "message": "not found"})
+    case http.MethodPut:
+        w.Header().Set("Content-Type", "application/json")
+        json.NewEncoder(w).Encode(map[string]string{"id": id, "message": "updated"})
+    case http.MethodDelete:
+        w.WriteHeader(http.StatusNoContent)
+    case http.MethodPost:
+        // handle submissions like /api/challenges/{id}/submit
+        if strings.HasSuffix(r.URL.Path, "/submit") {
+            w.Header().Set("Content-Type", "application/json")
+            json.NewEncoder(w).Encode(map[string]any{"correct": false, "message": "Incorrect flag"})
+            return
+        }
+        http.Error(w, "not found", http.StatusNotFound)
+    default:
+        http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+    }
+}
+
+func handleUserByID(w http.ResponseWriter, r *http.Request) {
+    id := strings.TrimPrefix(r.URL.Path, "/api/users/")
+    if id == "" {
+        http.NotFound(w, r)
+        return
+    }
+    w.Header().Set("Content-Type", "application/json")
+    json.NewEncoder(w).Encode(map[string]string{"id": id})
+}
+
+func handleGetLeaderboard(w http.ResponseWriter, r *http.Request) {
+    w.Header().Set("Content-Type", "application/json")
+    json.NewEncoder(w).Encode([]interface{}{})
+}
+
+func handleDownloadFile(w http.ResponseWriter, r *http.Request) {
+    name := strings.TrimPrefix(r.URL.Path, "/uploads/")
+    if strings.Contains(name, "..") || strings.Contains(name, "/") {
+        http.Error(w, "forbidden", http.StatusForbidden)
+        return
+    }
+    fp := filepath.Join(uploadDir, name)
+    http.ServeFile(w, r, fp)
+}
+
+func handleRegister(w http.ResponseWriter, r *http.Request) {
+    w.Header().Set("Content-Type", "application/json")
+    w.WriteHeader(http.StatusCreated)
+    json.NewEncoder(w).Encode(map[string]string{"message": "registered"})
+}
+
+func handleLogin(w http.ResponseWriter, r *http.Request) {
+    w.Header().Set("Content-Type", "application/json")
+    json.NewEncoder(w).Encode(map[string]string{"message": "logged-in"})
+}
+
+func handleLogout(w http.ResponseWriter, r *http.Request) {
+    w.WriteHeader(http.StatusOK)
+}
+
+func handleGetMe(w http.ResponseWriter, r *http.Request) {
+    http.Error(w, "unauthorized", http.StatusUnauthorized)
+}
+
+// serve static files or index.html for client-side routing
+func serveStaticOrNotFound(w http.ResponseWriter, r *http.Request) {
+    // if path starts with /api or /uploads, return 404
+    p := r.URL.Path
+    if strings.HasPrefix(p, "/api/") || strings.HasPrefix(p, "/uploads/") {
+        http.NotFound(w, r)
+        return
+    }
+
+    // map root to index.html
+    rel := strings.TrimPrefix(p, "/")
+    if rel == "" {
+        rel = "index.html"
+    }
+
+    fp := filepath.Join(publicDir, filepath.Clean(rel))
+    if stat, err := os.Stat(fp); err == nil && !stat.IsDir() {
+        http.ServeFile(w, r, fp)
+        return
+    }
+
+    // fallback to index.html for client-side routing
+    index := filepath.Join(publicDir, "index.html")
+    if stat, err := os.Stat(index); err == nil && !stat.IsDir() {
+        http.ServeFile(w, r, index)
+        return
+    }
+
+    http.NotFound(w, r)
+}
+
+// isAuthenticated placeholder
+func isAuthenticated(r *http.Request) bool { return false }
+package main
+
+import (
+	"context"
+	"encoding/json"
+	"fmt"
+	"io"
+	"log"
+	"net/http"
+	"os"
+	"os/signal"
+	"path/filepath"
+	"strconv"
+	"strings"
+	"syscall"
+	"time"
+)
+
+const (
+		"net"
+	defaultPort = "5000"
+)
+
+// Global state
+var (
+	uploadDir = "uploads"
+	publicDir = "dist/public"
+)
+
+func init() {
+	// Ensure uploads directory exists
+	os.MkdirAll(uploadDir, 0755)
+}
+
+func main() {
+	port := os.Getenv("PORT")
+	if port == "" {
+		port = defaultPort
+	}
+
+	// Validate environment
+	if os.Getenv("DATABASE_URL") == "" {
+		log.Fatal("DATABASE_URL environment variable not set")
+	}
+	if os.Getenv("SESSION_SECRET") == "" {
+		log.Fatal("SESSION_SECRET environment variable not set")
+	}
+
+	mux := http.NewServeMux()
+
+	// ============ API Routes ============
+
+	// Challenge routes
+	mux.HandleFunc("GET /api/challenges", handleGetChallenges)
+	mux.HandleFunc("GET /api/challenges/{id}", handleGetChallenge)
+	mux.HandleFunc("POST /api/challenges", handleCreateChallenge)
+	mux.HandleFunc("PUT /api/challenges/{id}", handleUpdateChallenge)
+	mux.HandleFunc("DELETE /api/challenges/{id}", handleDeleteChallenge)
+
+	// Flag submission
+	mux.HandleFunc("POST /api/challenges/{id}/submit", handleSubmitFlag)
+
+	// User routes
+	mux.HandleFunc("GET /api/users/{id}", handleGetUser)
+	mux.HandleFunc("GET /api/users/{id}/challenges", handleGetUserChallenges)
+	mux.HandleFunc("GET /api/users/{id}/solves", handleGetUserSolves)
+
+	// Leaderboard
+	mux.HandleFunc("GET /api/leaderboard", handleGetLeaderboard)
+
+	// Hints
+	mux.HandleFunc("POST /api/challenges/{id}/hints/{index}", handleUseHint)
+
+		Handler: loggingMiddleware(mux),
+		Addr:    ":" + port,
+
+	// Authentication routes
+	mux.HandleFunc("POST /api/register", handleRegister)
+	mux.HandleFunc("POST /api/login", handleLogin)
+	mux.HandleFunc("POST /api/logout", handleLogout)
+		fmt.Printf("serving on http://localhost:%d\n", listenPort)
+
+	// ============ Static Files ============
+	// Serve static files from dist/public
+	mux.HandleFunc("GET /{path...}", serveStaticOrNotFound)
+
+	srv := &http.Server{
+		Addr:    ":" + port,
+		Handler: loggingMiddleware(mux),
+	}
+
+	// start server
+	serverErr := make(chan error, 1)
+	go func() {
+		fmt.Printf("serving on http://localhost:%s\n", port)
+		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+			serverErr <- err
+		}
+	}()
+
+	// wait for interrupt or server error
+	stop := make(chan os.Signal, 1)
+	signal.Notify(stop, os.Interrupt, syscall.SIGTERM)
+
+	select {
+	case sig := <-stop:
+		log.Printf("signal received: %v, shutting down", sig)
+	case err := <-serverErr:
+		log.Fatalf("server error: %v", err)
+	}
+
+	// gracefully shutdown with timeout
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	if err := srv.Shutdown(ctx); err != nil {
+		log.Fatalf("graceful shutdown failed: %v", err)
+	}
+	log.Println("server stopped")
+}
+
+// Middleware for request logging
+func loggingMiddleware(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		start := time.Now()
+		path := r.URL.Path
+
+		// Wrap response writer to capture status and body
+		recorder := &responseRecorder{ResponseWriter: w, body: &strings.Builder{}}
+
+		next.ServeHTTP(recorder, r)
+
+		duration := time.Since(start).Milliseconds()
+		if strings.HasPrefix(path, "/api") {
+			logLine := fmt.Sprintf("%s %s %d in %dms", r.Method, path, recorder.statusCode, duration)
+			if recorder.body.Len() > 0 && recorder.statusCode < 400 {
+				bodyStr := recorder.body.String()
+				if len(bodyStr) > 200 {
+					bodyStr = bodyStr[:200] + "…"
+				}
+				logLine += fmt.Sprintf(" :: %s", bodyStr)
+			}
+			log.Println(logLine)
+		}
+	})
+}
+
+type responseRecorder struct {
+	http.ResponseWriter
+	statusCode int
+	body       *strings.Builder
+}
+
+func (r *responseRecorder) WriteHeader(statusCode int) {
+	r.statusCode = statusCode
+	r.ResponseWriter.WriteHeader(statusCode)
+}
+
+func (r *responseRecorder) Write(b []byte) (int, error) {
+	r.body.Write(b)
+	return r.ResponseWriter.Write(b)
+}
+
+// ============ Handler Functions ============
+
+func handleGetChallenges(w http.ResponseWriter, r *http.Request) {
+	// TODO: Implement with database
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode([]interface{}{})
+}
+
+func handleGetChallenge(w http.ResponseWriter, r *http.Request) {
+	_ = r.PathValue("id") // TODO: Use with database
+	// TODO: Implement with database
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusNotFound)
+	json.NewEncoder(w).Encode(map[string]string{"message": "Challenge not found"})
+}
+
+func handleCreateChallenge(w http.ResponseWriter, r *http.Request) {
+	// Check authentication
+	if !isAuthenticated(r) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusUnauthorized)
+		json.NewEncoder(w).Encode(map[string]string{"message": "Unauthorized"})
+		return
+	}
+
+	// TODO: Implement with database
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusCreated)
+	json.NewEncoder(w).Encode(map[string]string{"message": "Challenge created"})
+}
+
+func handleUpdateChallenge(w http.ResponseWriter, r *http.Request) {
+	_ = r.PathValue("id") // TODO: Use with database
+	if !isAuthenticated(r) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusUnauthorized)
+		json.NewEncoder(w).Encode(map[string]string{"message": "Unauthorized"})
+		return
+	}
+
+	// TODO: Implement with database
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]string{"message": "Updated"})
+}
+
+func handleDeleteChallenge(w http.ResponseWriter, r *http.Request) {
+	_ = r.PathValue("id") // TODO: Use with database
+	if !isAuthenticated(r) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusUnauthorized)
+		json.NewEncoder(w).Encode(map[string]string{"message": "Unauthorized"})
+		return
+	}
+
+	// TODO: Implement with database
+	w.WriteHeader(http.StatusNoContent)
+}
+
+func handleSubmitFlag(w http.ResponseWriter, r *http.Request) {
+	_ = r.PathValue("id") // TODO: Use with database
+	if !isAuthenticated(r) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusUnauthorized)
+		json.NewEncoder(w).Encode(map[string]string{"message": "Unauthorized"})
+		return
+	}
+
+	// TODO: Implement rate limiting and flag checking
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"correct": false,
+		"message": "Incorrect flag. Try again!",
+	})
+}
+
+func handleGetUser(w http.ResponseWriter, r *http.Request) {
+	_ = r.PathValue("id") // TODO: Use with database
+	// TODO: Implement with database
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusNotFound)
+	json.NewEncoder(w).Encode(map[string]string{"message": "User not found"})
+}
+
+func handleGetUserChallenges(w http.ResponseWriter, r *http.Request) {
+	_ = r.PathValue("id") // TODO: Use with database
+	// TODO: Implement with database
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode([]interface{}{})
+}
+
+func handleGetUserSolves(w http.ResponseWriter, r *http.Request) {
+	_ = r.PathValue("id") // TODO: Use with database
+	// TODO: Implement with database
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode([]interface{}{})
+}
+
+func handleGetLeaderboard(w http.ResponseWriter, r *http.Request) {
+	limitStr := r.URL.Query().Get("limit")
+	limit := 50
+	if l, err := strconv.Atoi(limitStr); err == nil && l > 0 {
+		limit = l
+	}
+
+	// TODO: Implement with database
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"limit": limit,
+		"items": []interface{}{},
+	})
+}
+
+func handleUseHint(w http.ResponseWriter, r *http.Request) {
+	_ = r.PathValue("id")    // TODO: Use with database
+	_ = r.PathValue("index") // TODO: Use with database
+
+	if !isAuthenticated(r) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusUnauthorized)
+		json.NewEncoder(w).Encode(map[string]string{"message": "Unauthorized"})
+		return
+	}
+
+	// TODO: Implement with database
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusNotFound)
+	json.NewEncoder(w).Encode(map[string]string{"message": "Hint not found"})
+}
+
+func handleDownloadFile(w http.ResponseWriter, r *http.Request) {
+	filename := r.PathValue("filename")
+
+	// Validate filename (prevent directory traversal)
+	if strings.Contains(filename, "..") || strings.Contains(filename, "/") {
+		w.WriteHeader(http.StatusForbidden)
+		return
+	}
+
+	filepath := filepath.Join(uploadDir, filename)
+	http.ServeFile(w, r, filepath)
+}
+
+func handleRegister(w http.ResponseWriter, r *http.Request) {
+	// TODO: Implement with database
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusCreated)
+	json.NewEncoder(w).Encode(map[string]string{"message": "User registered"})
+}
+
+func handleLogin(w http.ResponseWriter, r *http.Request) {
+	// TODO: Implement with database and session handling
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]string{"message": "Logged in"})
+}
+
+func handleLogout(w http.ResponseWriter, r *http.Request) {
+	// TODO: Implement session clearing
+	w.WriteHeader(http.StatusOK)
+}
+
+func handleGetMe(w http.ResponseWriter, r *http.Request) {
+	if !isAuthenticated(r) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusUnauthorized)
+		json.NewEncoder(w).Encode(map[string]string{"message": "Unauthorized"})
+		return
+	}
+
+	// TODO: Implement with session data
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]string{})
+}
+
+// Serve static files from dist/public or return 404 page
+func serveStaticOrNotFound(w http.ResponseWriter, r *http.Request) {
+	path := r.PathValue("path")
+	if path == "" {
+		path = "index.html"
+	}
+
+	// Remove leading slash
+	path = strings.TrimPrefix(path, "/")
+
+	// Build file path
+	filePath := filepath.Join(publicDir, filepath.Clean(path))
+
+	// Check if file exists
+	if stat, err := os.Stat(filePath); err == nil && !stat.IsDir() {
+		// Determine content type
+		contentType := getContentType(filePath)
+		w.Header().Set("Content-Type", contentType)
+		http.ServeFile(w, r, filePath)
+		return
+	}
+
+	// Try index.html for directory routes (for client-side routing)
+	indexPath := filepath.Join(publicDir, "index.html")
+	if stat, err := os.Stat(indexPath); err == nil && !stat.IsDir() {
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		http.ServeFile(w, r, indexPath)
+		return
+	}
+
+	// 404
+	w.WriteHeader(http.StatusNotFound)
+	io.WriteString(w, "404 - Not Found")
+}
+
+func getContentType(filePath string) string {
+	ext := filepath.Ext(filePath)
+	switch ext {
+	case ".html":
+		return "text/html; charset=utf-8"
+	case ".css":
+		return "text/css"
+	case ".js":
+		return "application/javascript"
+	case ".json":
+		return "application/json"
+	case ".svg":
+		return "image/svg+xml"
+	case ".png":
+		return "image/png"
+	case ".jpg", ".jpeg":
+		return "image/jpeg"
+	case ".gif":
+		return "image/gif"
+	case ".woff":
+		return "font/woff"
+	case ".woff2":
+		return "font/woff2"
+	case ".ttf":
+		return "font/ttf"
+	case ".txt":
+		return "text/plain"
+	default:
+		return "application/octet-stream"
+	}
+}
+
+// Helper functions
+func isAuthenticated(r *http.Request) bool {
+	// TODO: Implement session checking
+	return false
+}

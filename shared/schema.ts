@@ -1,49 +1,51 @@
 import { sql } from "drizzle-orm";
 import { 
-  pgTable, 
+  mysqlTable, 
   text, 
   varchar, 
-  integer, 
+  int, 
   boolean, 
   timestamp,
-  jsonb
-} from "drizzle-orm/pg-core";
+  json
+} from "drizzle-orm/mysql-core";
 import { createInsertSchema } from "drizzle-zod";
 import { z } from "zod";
 import { relations } from "drizzle-orm";
 
-export const users = pgTable("users", {
-  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
-  username: text("username").notNull().unique(),
-  email: text("email").notNull().unique(),
+export const users = mysqlTable("users", {
+  id: varchar("id", { length: 36 }).primaryKey().default(sql`(UUID())`),
+  username: varchar("username", { length: 255 }).notNull().unique(),
+  email: varchar("email", { length: 255 }).notNull().unique(),
   password: text("password").notNull(),
-  score: integer("score").default(0),
+  score: int("score").default(0),
+  isAdmin: boolean("is_admin").default(false),
   createdAt: timestamp("created_at").defaultNow(),
   updatedAt: timestamp("updated_at").defaultNow(),
 });
 
-export const challenges = pgTable("challenges", {
-  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
-  title: text("title").notNull(),
-  slug: text("slug").notNull().unique(),
+export const challenges = mysqlTable("challenges", {
+  id: varchar("id", { length: 36 }).primaryKey().default(sql`(UUID())`),
+  title: varchar("title", { length: 500 }).notNull(),
+  slug: varchar("slug", { length: 500 }).notNull().unique(),
   description: text("description").notNull(),
-  category: text("category").notNull(),
-  difficulty: text("difficulty").notNull(),
-  points: integer("points").notNull(),
+  category: varchar("category", { length: 255 }).notNull(),
+  difficulty: varchar("difficulty", { length: 50 }).notNull(),
+  points: int("points").notNull(),
   flagHash: text("flag_hash").notNull(),
   flagSalt: text("flag_salt").notNull(),
   published: boolean("published").default(false),
-  creatorId: varchar("creator_id").notNull().references(() => users.id),
-  artifacts: jsonb("artifacts").$type<Array<{name: string, url: string, size: number}>>().default([]),
-  hints: jsonb("hints").$type<Array<{text: string, cost: number}>>().default([]),
+  globalSolved: boolean("global_solved").default(false),
+  creatorId: varchar("creator_id", { length: 36 }).notNull().references(() => users.id),
+  artifacts: json("artifacts").$type<Array<{name: string, url: string, size: number}>>().default([]),
+  hints: json("hints").$type<Array<{text: string, cost: number}>>().default([]),
   createdAt: timestamp("created_at").defaultNow(),
   updatedAt: timestamp("updated_at").defaultNow(),
 });
 
-export const submissions = pgTable("submissions", {
-  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
-  userId: varchar("user_id").notNull().references(() => users.id),
-  challengeId: varchar("challenge_id").notNull().references(() => challenges.id),
+export const submissions = mysqlTable("submissions", {
+  id: varchar("id", { length: 36 }).primaryKey().default(sql`(UUID())`),
+  userId: varchar("user_id", { length: 36 }).notNull().references(() => users.id),
+  challengeId: varchar("challenge_id", { length: 36 }).notNull().references(() => challenges.id),
   flagAttempt: text("flag_attempt").notNull(),
   isCorrect: boolean("is_correct").notNull(),
   ipAddress: text("ip_address"),
@@ -51,34 +53,34 @@ export const submissions = pgTable("submissions", {
   submittedAt: timestamp("submitted_at").defaultNow(),
 });
 
-export const solves = pgTable("solves", {
-  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
-  userId: varchar("user_id").notNull().references(() => users.id),
-  challengeId: varchar("challenge_id").notNull().references(() => challenges.id),
+export const solves = mysqlTable("solves", {
+  id: varchar("id", { length: 36 }).primaryKey().default(sql`(UUID())`),
+  userId: varchar("user_id", { length: 36 }).notNull().references(() => users.id),
+  challengeId: varchar("challenge_id", { length: 36 }).notNull().references(() => challenges.id),
   solvedAt: timestamp("solved_at").defaultNow(),
 });
 
-export const achievements = pgTable("achievements", {
-  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+export const achievements = mysqlTable("achievements", {
+  id: varchar("id", { length: 36 }).primaryKey().default(sql`(UUID())`),
   name: text("name").notNull(),
   description: text("description").notNull(),
   icon: text("icon").notNull(),
   createdAt: timestamp("created_at").defaultNow(),
 });
 
-export const userAchievements = pgTable("user_achievements", {
-  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
-  userId: varchar("user_id").notNull().references(() => users.id),
-  achievementId: varchar("achievement_id").notNull().references(() => achievements.id),
+export const userAchievements = mysqlTable("user_achievements", {
+  id: varchar("id", { length: 36 }).primaryKey().default(sql`(UUID())`),
+  userId: varchar("user_id", { length: 36 }).notNull().references(() => users.id),
+  achievementId: varchar("achievement_id", { length: 36 }).notNull().references(() => achievements.id),
   unlockedAt: timestamp("unlocked_at").defaultNow(),
 });
 
-export const hintUsage = pgTable("hint_usage", {
-  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
-  userId: varchar("user_id").notNull().references(() => users.id),
-  challengeId: varchar("challenge_id").notNull().references(() => challenges.id),
-  hintIndex: integer("hint_index").notNull(),
-  pointsDeducted: integer("points_deducted").notNull(),
+export const hintUsage = mysqlTable("hint_usage", {
+  id: varchar("id", { length: 36 }).primaryKey().default(sql`(UUID())`),
+  userId: varchar("user_id", { length: 36 }).notNull().references(() => users.id),
+  challengeId: varchar("challenge_id", { length: 36 }).notNull().references(() => challenges.id),
+  hintIndex: int("hint_index").notNull(),
+  pointsDeducted: int("points_deducted").notNull(),
   usedAt: timestamp("used_at").defaultNow(),
 });
 

@@ -1,5 +1,6 @@
-import { useState } from "react";
-import { useMutation } from "@tanstack/react-query";
+import { useState, useEffect } from "react";
+import { useParams, useLocation } from "wouter";
+import { useMutation, useQuery } from "@tanstack/react-query";
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { z } from "zod";
@@ -12,9 +13,8 @@ import { Textarea } from "@/components/ui/textarea";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Checkbox } from "@/components/ui/checkbox";
 import { useToast } from "@/hooks/use-toast";
-import { apiRequest, queryClient } from "@/lib/queryClient";
-import { Upload, Plus, X, FileText } from "lucide-react";
-import { useLocation } from "wouter";
+import { queryClient } from "@/lib/queryClient";
+import { Plus, X, FileText, Loader2 } from "lucide-react";
 
 const challengeSchema = z.object({
   title: z.string().min(1, "Title is required"),
@@ -22,7 +22,7 @@ const challengeSchema = z.object({
   difficulty: z.string().min(1, "Difficulty is required"),
   points: z.number().min(50, "Minimum 50 points").max(1000, "Maximum 1000 points"),
   description: z.string().min(10, "Description must be at least 10 characters"),
-  flag: z.string().min(1, "Flag is required"),
+  flag: z.string().optional(),
   published: z.boolean().default(false),
 });
 
@@ -33,11 +33,21 @@ interface Hint {
   cost: number;
 }
 
-export default function CreateChallengePage() {
+export default function EditChallengePage() {
+  const { id } = useParams<{ id: string }>();
   const { toast } = useToast();
   const [, setLocation] = useLocation();
   const [selectedFiles, setSelectedFiles] = useState<File[]>([]);
   const [hints, setHints] = useState<Hint[]>([]);
+
+  const { data: challenge, isLoading } = useQuery({
+    queryKey: [`/api/challenges/${id}`],
+    queryFn: async () => {
+      const res = await fetch(`/api/challenges/${id}`);
+      if (!res.ok) throw new Error("Failed to fetch challenge");
+      return res.json();
+    },
+  });
 
   const form = useForm<ChallengeForm>({
     resolver: zodResolver(challengeSchema),
@@ -52,49 +62,64 @@ export default function CreateChallengePage() {
     },
   });
 
-  const createChallengeMutation = useMutation({
-    mutationFn: async (data: ChallengeForm & { files: File[]; hints: Hint[] }) => {
+  useEffect(() => {
+    if (challenge) {
+      form.reset({
+        title: challenge.title,
+        category: challenge.category,
+        difficulty: challenge.difficulty,
+        points: challenge.points,
+        description: challenge.description,
+        published: challenge.published,
+      });
+      // Parse hints if it's a string, otherwise use as-is
+      const parsedHints = typeof challenge.hints === 'string' 
+        ? JSON.parse(challenge.hints) 
+        : (Array.isArray(challenge.hints) ? challenge.hints : []);
+      setHints(parsedHints);
+    }
+  }, [challenge, form]);
+
+  const updateChallengeMutation = useMutation({
+    mutationFn: async (data: ChallengeForm) => {
       const formData = new FormData();
       
-      // Add form fields
       Object.entries(data).forEach(([key, value]) => {
         if (key !== 'files' && key !== 'hints') {
           formData.append(key, value.toString());
         }
       });
       
-      // Add hints as JSON
-      formData.append('hints', JSON.stringify(data.hints));
+      formData.append('hints', JSON.stringify(hints));
       
-      // Add files
-      data.files.forEach(file => {
+      selectedFiles.forEach(file => {
         formData.append('files', file);
       });
 
-      const res = await fetch('/api/challenges', {
-        method: 'POST',
+      const res = await fetch(`/api/challenges/${id}`, {
+        method: 'PUT',
         body: formData,
         credentials: 'include',
       });
       
       if (!res.ok) {
         const error = await res.json();
-        throw new Error(error.message || 'Failed to create challenge');
+        throw new Error(error.message || 'Failed to update challenge');
       }
       
       return res.json();
     },
     onSuccess: () => {
       toast({
-        title: "Challenge Created! 🎉",
-        description: "Your challenge has been created successfully.",
+        title: "Challenge Updated! ✨",
+        description: "Your challenge has been updated successfully.",
       });
       queryClient.invalidateQueries({ queryKey: ["/api/challenges"] });
-      setLocation("/");
+      setLocation("/profile");
     },
     onError: (error: Error) => {
       toast({
-        title: "Creation Failed",
+        title: "Update Failed",
         description: error.message,
         variant: "destructive",
       });
@@ -125,12 +150,19 @@ export default function CreateChallengePage() {
   };
 
   const onSubmit = (data: ChallengeForm) => {
-    createChallengeMutation.mutate({
-      ...data,
-      files: selectedFiles,
-      hints: hints.filter(hint => hint.text.trim() !== ""),
-    });
+    updateChallengeMutation.mutate(data);
   };
+
+  if (isLoading) {
+    return (
+      <div className="min-h-screen bg-background text-foreground">
+        <Header />
+        <main className="container mx-auto px-4 py-8 flex items-center justify-center">
+          <Loader2 className="h-8 w-8 animate-spin text-primary" />
+        </main>
+      </div>
+    );
+  }
 
   return (
     <div className="min-h-screen bg-background text-foreground">
@@ -138,11 +170,11 @@ export default function CreateChallengePage() {
       
       <main className="container mx-auto px-4 py-8">
         <div className="mb-8">
-          <h1 className="text-3xl font-bold gradient-text terminal-cursor mb-2">Create Challenge</h1>
-          <p className="text-muted-foreground">Design a new challenge for the community</p>
+          <h1 className="text-3xl font-bold gradient-text terminal-cursor mb-2">Edit Challenge</h1>
+          <p className="text-muted-foreground">Update your challenge details</p>
         </div>
 
-        <Card className="neon-border" data-testid="challenge-form">
+        <Card className="neon-border">
           <CardHeader>
             <CardTitle>Challenge Details</CardTitle>
           </CardHeader>
@@ -158,7 +190,6 @@ export default function CreateChallengePage() {
                     {...form.register("title")}
                     placeholder="My Awesome Challenge"
                     className="mt-1"
-                    data-testid="input-title"
                   />
                   {form.formState.errors.title && (
                     <p className="text-sm text-destructive mt-1">
@@ -169,19 +200,16 @@ export default function CreateChallengePage() {
                 
                 <div>
                   <Label htmlFor="category">Category</Label>
-                  <Select onValueChange={(value) => form.setValue("category", value)}>
-                    <SelectTrigger className="mt-1" data-testid="select-category">
+                  <Select onValueChange={(value) => form.setValue("category", value)} defaultValue={challenge?.category}>
+                    <SelectTrigger className="mt-1">
                       <SelectValue placeholder="Select category" />
                     </SelectTrigger>
                     <SelectContent>
-                      <SelectItem value="Cryptography">Cryptography</SelectItem>
-                      <SelectItem value="Digital Forensics">Digital Forensics</SelectItem>
-                      <SelectItem value="Threats">Threats</SelectItem>
-                      <SelectItem value="Firewall & Network Security">Firewall & Network Security</SelectItem>
-                      <SelectItem value="Sandbox & Virtualization">Sandbox & Virtualization</SelectItem>
-                      <SelectItem value="Denial of Service">Denial of Service</SelectItem>
-                      <SelectItem value="Consolidated Security Planning">Consolidated Security Planning</SelectItem>
-
+                      <SelectItem value="Web">Web</SelectItem>
+                      <SelectItem value="Binary">Binary</SelectItem>
+                      <SelectItem value="Crypto">Crypto</SelectItem>
+                      <SelectItem value="Forensics">Forensics</SelectItem>
+                      <SelectItem value="Misc">Misc</SelectItem>
                     </SelectContent>
                   </Select>
                   {form.formState.errors.category && (
@@ -195,15 +223,15 @@ export default function CreateChallengePage() {
               <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
                 <div>
                   <Label htmlFor="difficulty">Difficulty</Label>
-                  <Select onValueChange={(value) => form.setValue("difficulty", value)}>
-                    <SelectTrigger className="mt-1" data-testid="select-difficulty">
+                  <Select onValueChange={(value) => form.setValue("difficulty", value)} defaultValue={challenge?.difficulty}>
+                    <SelectTrigger className="mt-1">
                       <SelectValue placeholder="Select difficulty" />
                     </SelectTrigger>
                     <SelectContent>
                       <SelectItem value="Easy">Easy</SelectItem>
                       <SelectItem value="Medium">Medium</SelectItem>
                       <SelectItem value="Hard">Hard</SelectItem>
-        
+                      <SelectItem value="Insane">Insane</SelectItem>
                     </SelectContent>
                   </Select>
                   {form.formState.errors.difficulty && (
@@ -218,13 +246,12 @@ export default function CreateChallengePage() {
                   <Input
                     id="points"
                     type="number"
-                    min="1"
-                    max="100"
+                    min="50"
+                    max="1000"
                     step="25"
                     {...form.register("points", { valueAsNumber: true })}
                     placeholder="100"
                     className="mt-1"
-                    data-testid="input-points"
                   />
                   {form.formState.errors.points && (
                     <p className="text-sm text-destructive mt-1">
@@ -241,9 +268,8 @@ export default function CreateChallengePage() {
                   id="description"
                   {...form.register("description")}
                   rows={8}
-                  placeholder="Describe your challenge here. You can use **markdown** for formatting..."
+                  placeholder="Describe your challenge here..."
                   className="mt-1 font-mono"
-                  data-testid="textarea-description"
                 />
                 {form.formState.errors.description && (
                   <p className="text-sm text-destructive mt-1">
@@ -254,47 +280,35 @@ export default function CreateChallengePage() {
               
               {/* Flag */}
               <div>
-                <Label htmlFor="flag">Flag</Label>
+                <Label htmlFor="flag">Flag (optional - leave blank to keep existing)</Label>
                 <Input
                   id="flag"
                   type="password"
                   {...form.register("flag")}
-                  placeholder="flag{this_will_be_hashed}"
+                  placeholder="Leave blank to keep current flag"
                   className="mt-1 font-mono"
-                  data-testid="input-flag"
                 />
                 <p className="text-xs text-muted-foreground mt-1">
-                  Flag will be hashed and salted for security
+                  Only fill this to change the flag
                 </p>
-                {form.formState.errors.flag && (
-                  <p className="text-sm text-destructive mt-1">
-                    {form.formState.errors.flag.message}
-                  </p>
-                )}
               </div>
               
               {/* File Uploads */}
               <div>
                 <Label>Challenge Files</Label>
                 <div className="mt-1 border-2 border-dashed border-border rounded-lg p-8 text-center bg-muted/20">
-                  <Upload className="h-8 w-8 text-primary mx-auto mb-4" />
-                  <p className="text-muted-foreground mb-2">Drag & drop files here, or click to browse</p>
-                  <p className="text-xs text-muted-foreground mb-4">
-                    Max 50MB total. Supported: zip, tar.gz, txt, jpg, png, pdf
-                  </p>
+                  <p className="text-muted-foreground mb-2">Add new files (optional)</p>
                   <Input
                     type="file"
                     multiple
                     onChange={handleFileChange}
                     className="hidden"
                     id="file-upload"
-                    data-testid="input-files"
                   />
                   <Button 
                     type="button" 
                     variant="outline" 
                     onClick={() => document.getElementById('file-upload')?.click()}
-                    data-testid="button-choose-files"
                   >
                     Choose Files
                   </Button>
@@ -316,7 +330,6 @@ export default function CreateChallengePage() {
                           variant="ghost"
                           size="sm"
                           onClick={() => removeFile(index)}
-                          data-testid={`button-remove-file-${index}`}
                         >
                           <X className="w-4 h-4" />
                         </Button>
@@ -330,14 +343,13 @@ export default function CreateChallengePage() {
               <div>
                 <Label>Hints (Optional)</Label>
                 <div className="mt-1 space-y-3">
-                  {hints.map((hint, index) => (
+                  {Array.isArray(hints) && hints.map((hint, index) => (
                     <div key={index} className="flex gap-3">
                       <Input
                         placeholder={`Hint ${index + 1}...`}
                         value={hint.text}
                         onChange={(e) => updateHint(index, 'text', e.target.value)}
                         className="flex-1"
-                        data-testid={`input-hint-text-${index}`}
                       />
                       <Input
                         type="number"
@@ -347,14 +359,12 @@ export default function CreateChallengePage() {
                         value={hint.cost}
                         onChange={(e) => updateHint(index, 'cost', parseInt(e.target.value) || 0)}
                         className="w-24"
-                        data-testid={`input-hint-cost-${index}`}
                       />
                       <Button
                         type="button"
                         variant="ghost"
                         size="sm"
                         onClick={() => removeHint(index)}
-                        data-testid={`button-remove-hint-${index}`}
                       >
                         <X className="w-4 h-4" />
                       </Button>
@@ -365,7 +375,6 @@ export default function CreateChallengePage() {
                     variant="ghost"
                     onClick={addHint}
                     className="text-primary hover:text-secondary transition-colors text-sm"
-                    data-testid="button-add-hint"
                   >
                     <Plus className="w-4 h-4 mr-1" />
                     Add Hint
@@ -379,10 +388,9 @@ export default function CreateChallengePage() {
                   id="published"
                   checked={form.watch("published")}
                   onCheckedChange={(checked) => form.setValue("published", !!checked)}
-                  data-testid="checkbox-published"
                 />
                 <Label htmlFor="published" className="text-sm">
-                  Publish immediately (make visible to all users)
+                  Publish (make visible to all users)
                 </Label>
               </div>
               
@@ -391,19 +399,17 @@ export default function CreateChallengePage() {
                 <Button
                   type="button"
                   variant="outline"
-                  onClick={() => form.setValue("published", false)}
-                  disabled={createChallengeMutation.isPending}
-                  data-testid="button-save-draft"
+                  onClick={() => setLocation("/profile")}
+                  disabled={updateChallengeMutation.isPending}
                 >
-                  Save as Draft
+                  Cancel
                 </Button>
                 <Button
                   type="submit"
                   className="hover-glow"
-                  disabled={createChallengeMutation.isPending}
-                  data-testid="button-create-challenge"
+                  disabled={updateChallengeMutation.isPending}
                 >
-                  {createChallengeMutation.isPending ? "Creating..." : "Create Challenge"}
+                  {updateChallengeMutation.isPending ? "Updating..." : "Update Challenge"}
                 </Button>
               </div>
             </form>

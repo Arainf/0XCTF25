@@ -7,7 +7,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
-import { Plus, Trophy, Flag, Medal, Target } from "lucide-react";
+import { Plus, Trophy, Flag, Medal, Target, Globe } from "lucide-react";
 import { Link } from "wouter";
 import { useState } from "react";
 
@@ -63,6 +63,15 @@ export default function HomePage() {
     enabled: !!user?.id,
   });
 
+  const { data: globalStats } = useQuery({
+    queryKey: ["/api/stats"],
+    queryFn: async () => {
+      const res = await fetch("/api/stats");
+      if (!res.ok) throw new Error("Failed to fetch global stats");
+      return res.json();
+    },
+  });
+
   const filteredChallenges = challenges?.filter((challenge: any) => {
     if (selectedStatus === "solved" && !challenge.hasSolved) return false;
     if (selectedStatus === "unsolved" && challenge.hasSolved) return false;
@@ -104,6 +113,7 @@ export default function HomePage() {
             </CardContent>
           </Card>
           
+          {user?.isAdmin && (
           <Card className="neon-border hover-glow transition-all duration-200">
             <CardContent className="p-6">
               <div className="flex items-center justify-between">
@@ -117,6 +127,7 @@ export default function HomePage() {
               </div>
             </CardContent>
           </Card>
+          )}
           
           <Card className="neon-border hover-glow transition-all duration-200">
             <CardContent className="p-6">
@@ -133,16 +144,65 @@ export default function HomePage() {
           </Card>
         </section>
 
+        {/* Global Stats */}
+        <section className="grid grid-cols-1 md:grid-cols-2 gap-6">
+          <Card className="neon-border hover-glow transition-all duration-200">
+            <CardContent className="p-6">
+              <div className="flex items-center justify-between mb-4">
+                <h3 className="text-lg font-semibold">Global Progress</h3>
+                <Globe className="text-primary text-2xl" />
+              </div>
+              <div className="space-y-4">
+                <div>
+                  <div className="flex justify-between items-center mb-2">
+                    <span className="text-muted-foreground text-sm">Completion Rate</span>
+                    <span className="text-2xl font-bold text-primary">{globalStats?.percentComplete || 0}%</span>
+                  </div>
+                  <div className="w-full bg-muted rounded-full h-2">
+                    <div
+                      className="bg-gradient-to-r from-cyan-400 to-purple-500 h-2 rounded-full transition-all"
+                      style={{ width: `${globalStats?.percentComplete || 0}%` }}
+                    />
+                  </div>
+                </div>
+                <div className="text-sm text-muted-foreground">
+                  <span className="font-semibold text-primary">{globalStats?.totalSolvedPoints || 0}</span> / <span className="font-semibold text-primary">{globalStats?.totalAvailablePoints || 0}</span> points solved
+                </div>
+              </div>
+            </CardContent>
+          </Card>
+
+          <Card className="neon-border hover-glow transition-all duration-200">
+            <CardContent className="p-6">
+              <div className="flex items-center justify-between mb-4">
+                <h3 className="text-lg font-semibold">Competition Stats</h3>
+                <Trophy className="text-primary text-2xl" />
+              </div>
+              <div className="space-y-3">
+                <div className="flex justify-between items-center">
+                  <span className="text-muted-foreground">Challenges Solved</span>
+                  <span className="text-2xl font-bold text-primary">{globalStats?.solvedCount || 0} / {globalStats?.totalCount || 0}</span>
+                </div>
+                <div className="text-sm text-muted-foreground">
+                  {globalStats?.totalCount} challenges available in total
+                </div>
+              </div>
+            </CardContent>
+          </Card>
+        </section>
+
         {/* Challenge Browser */}
         <section className="space-y-6" data-testid="challenge-browser">
           <div className="flex items-center justify-between">
             <h2 className="text-3xl font-bold gradient-text terminal-cursor">Challenges</h2>
-            <Link href="/create" data-testid="link-create-challenge">
-              <Button className="hover-glow">
-                <Plus className="mr-2 h-4 w-4" />
-                New Challenge
-              </Button>
-            </Link>
+            {user?.isAdmin && (
+              <Link href="/create" data-testid="link-create-challenge">
+                <Button className="hover-glow">
+                  <Plus className="mr-2 h-4 w-4" />
+                  New Challenge
+                </Button>
+              </Link>
+            )}
           </div>
           
           {/* Search and Filters */}
@@ -167,11 +227,13 @@ export default function HomePage() {
                     </SelectTrigger>
                     <SelectContent>
                       <SelectItem value="all">All Categories</SelectItem>
-                      <SelectItem value="Web">Web</SelectItem>
-                      <SelectItem value="Binary">Binary</SelectItem>
-                      <SelectItem value="Crypto">Crypto</SelectItem>
-                      <SelectItem value="Forensics">Forensics</SelectItem>
-                      <SelectItem value="Misc">Misc</SelectItem>
+                      <SelectItem value="Cryptography">Cryptography</SelectItem>
+                      <SelectItem value="Digital Forensics">Digital Forensics</SelectItem>
+                      <SelectItem value="Threats">Threats</SelectItem>
+                      <SelectItem value="Firewall & Network Security">Firewall & Network Security</SelectItem>
+                      <SelectItem value="Sandbox & Virtualization">Sandbox & Virtualization</SelectItem>
+                      <SelectItem value="Denial of Service">Denial of Service</SelectItem>
+                      <SelectItem value="Consolidated Security Planning">Consolidated Security Planning</SelectItem>
                     </SelectContent>
                   </Select>
                   
@@ -184,7 +246,7 @@ export default function HomePage() {
                       <SelectItem value="Easy">Easy</SelectItem>
                       <SelectItem value="Medium">Medium</SelectItem>
                       <SelectItem value="Hard">Hard</SelectItem>
-                      <SelectItem value="Insane">Insane</SelectItem>
+                
                     </SelectContent>
                   </Select>
                   

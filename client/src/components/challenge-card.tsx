@@ -16,7 +16,7 @@ interface Challenge {
   };
   solveCount: number;
   artifacts: Array<{ name: string; url: string; size: number }>;
-  hasSolved?: boolean;
+  globalSolved?: boolean;
 }
 
 interface ChallengeCardProps {
@@ -34,11 +34,11 @@ export function ChallengeCard({ challenge }: ChallengeCardProps) {
   return (
     <Card 
       className={`neon-border hover-glow transition-all duration-200 overflow-hidden relative ${
-        challenge.hasSolved ? 'border-green-500/50' : ''
+        challenge.globalSolved ? 'border-green-500/50' : ''
       }`}
       data-testid={`card-challenge-${challenge.id}`}
     >
-      {challenge.hasSolved && (
+      {challenge.globalSolved && (
         <div className="absolute top-2 right-2 bg-green-500 text-black px-2 py-1 rounded text-xs font-bold">
           <Check className="w-3 h-3 mr-1 inline" />
           SOLVED
@@ -98,9 +98,9 @@ export function ChallengeCard({ challenge }: ChallengeCardProps) {
       
       <div className="border-t border-border p-4 bg-muted/30">
         <Link href={`/challenge/${challenge.id}`} data-testid={`link-challenge-${challenge.id}`}>
-          <Button className="w-full hover-glow" disabled={challenge.hasSolved}>
+          <Button className="w-full hover-glow">
             <Play className="mr-2 h-4 w-4" />
-            {challenge.hasSolved ? 'View Challenge' : 'Start Challenge'}
+            {challenge.globalSolved ? 'View Challenge' : 'Start Challenge'}
           </Button>
         </Link>
       </div>

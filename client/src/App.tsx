@@ -10,17 +10,22 @@ import AuthPage from "@/pages/auth-page";
 import ChallengePage from "@/pages/challenge-page";
 import LeaderboardPage from "@/pages/leaderboard-page";
 import CreateChallengePage from "@/pages/create-challenge-page";
+import EditChallengePage from "@/pages/edit-challenge-page";
+import AdminPage from "@/pages/admin-page";
+import { AdminProtectedRoute } from "./lib/admin-protected-route";
 import ProfilePage from "@/pages/profile-page";
 import NotFound from "@/pages/not-found";
 
 function Router() {
   return (
-    <Switch>
+      <Switch>
       <ProtectedRoute path="/" component={HomePage} />
       <ProtectedRoute path="/challenge/:id" component={ChallengePage} />
       <ProtectedRoute path="/leaderboard" component={LeaderboardPage} />
-      <ProtectedRoute path="/create" component={CreateChallengePage} />
+      <AdminProtectedRoute path="/create" component={CreateChallengePage} />
+      <ProtectedRoute path="/challenge/:id/edit" component={EditChallengePage} />
       <ProtectedRoute path="/profile" component={ProfilePage} />
+      <AdminProtectedRoute path="/admin" component={AdminPage} />
       <Route path="/auth" component={AuthPage} />
       <Route component={NotFound} />
     </Switch>

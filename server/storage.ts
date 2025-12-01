@@ -84,10 +84,10 @@ export class DatabaseStorage implements IStorage {
   }
 
   async createUser(insertUser: InsertUser): Promise<User> {
-    const [user] = await db
+    await db
       .insert(users)
-      .values(insertUser)
-      .returning();
+      .values(insertUser);
+    const [user] = await db.select().from(users).where(eq(users.email, insertUser.email));
     return user;
   }
 
@@ -180,21 +180,21 @@ export class DatabaseStorage implements IStorage {
       flagSalt: salt,
     };
 
-    const [challenge] = await db
+    await db
       .insert(challenges)
-      .values(payload)
-      .returning();
+      .values(payload);
     
+    const [challenge] = await db.select().from(challenges).where(eq(challenges.slug, slug));
     return challenge;
   }
 
   async updateChallenge(id: string, challengeUpdate: Partial<Challenge>): Promise<Challenge> {
-    const [challenge] = await db
+    await db
       .update(challenges)
       .set({ ...challengeUpdate, updatedAt: new Date() })
-      .where(eq(challenges.id, id))
-      .returning();
+      .where(eq(challenges.id, id));
     
+    const [challenge] = await db.select().from(challenges).where(eq(challenges.id, id));
     return challenge;
   }
 
@@ -221,11 +221,11 @@ export class DatabaseStorage implements IStorage {
   }
 
   async createSubmission(submission: InsertSubmission): Promise<Submission> {
-    const [newSubmission] = await db
+    await db
       .insert(submissions)
-      .values(submission)
-      .returning();
+      .values(submission);
     
+    const [newSubmission] = await db.select().from(submissions).where(eq(submissions.userId, submission.userId)).orderBy(desc(submissions.submittedAt));
     return newSubmission;
   }
 
@@ -247,11 +247,11 @@ export class DatabaseStorage implements IStorage {
   }
 
   async createSolve(userId: string, challengeId: string): Promise<Solve> {
-    const [solve] = await db
+    await db
       .insert(solves)
-      .values({ userId, challengeId })
-      .returning();
+      .values({ userId, challengeId });
     
+    const [solve] = await db.select().from(solves).where(and(eq(solves.userId, userId), eq(solves.challengeId, challengeId))).orderBy(desc(solves.solvedAt));
     return solve;
   }
 
@@ -289,6 +289,7 @@ export class DatabaseStorage implements IStorage {
       })
       .from(users)
       .leftJoin(solves, eq(users.id, solves.userId))
+      .where(eq(users.isAdmin, false))
       .groupBy(users.id)
       .orderBy(desc(users.score), desc(count(solves.id)))
       .limit(limit);
@@ -334,20 +335,20 @@ export class DatabaseStorage implements IStorage {
   }
 
   async unlockAchievement(userId: string, achievementId: string): Promise<UserAchievement> {
-    const [userAchievement] = await db
+    await db
       .insert(userAchievements)
-      .values({ userId, achievementId })
-      .returning();
+      .values({ userId, achievementId });
     
+    const [userAchievement] = await db.select().from(userAchievements).where(and(eq(userAchievements.userId, userId), eq(userAchievements.achievementId, achievementId))).orderBy(desc(userAchievements.unlockedAt));
     return userAchievement;
   }
 
   async useHint(userId: string, challengeId: string, hintIndex: number, pointsDeducted: number): Promise<HintUsage> {
-    const [hint] = await db
+    await db
       .insert(hintUsage)
-      .values({ userId, challengeId, hintIndex, pointsDeducted })
-      .returning();
+      .values({ userId, challengeId, hintIndex, pointsDeducted });
     
+    const [hint] = await db.select().from(hintUsage).where(and(eq(hintUsage.userId, userId), eq(hintUsage.challengeId, challengeId))).orderBy(desc(hintUsage.usedAt));
     return hint;
   }
 

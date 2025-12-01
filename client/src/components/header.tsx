@@ -15,7 +15,8 @@ export function Header() {
   const navItems = [
     { path: "/", label: "Challenges" },
     { path: "/leaderboard", label: "Leaderboard" },
-    { path: "/create", label: "Create" },
+    // Create is admin-only; we'll conditionally render it below when user.isAdmin is true
+    { path: "/create", label: "Create", adminOnly: true },
     { path: "/profile", label: "Profile" },
   ];
 
@@ -31,17 +32,20 @@ export function Header() {
           </div>
           
           <div className="hidden md:flex items-center space-x-6">
-            {navItems.map((item) => (
-              <Link key={item.path} href={item.path} data-testid={`link-nav-${item.label.toLowerCase()}`}>
-                <span 
-                  className={`hover:text-primary transition-colors cursor-pointer ${
-                    location === item.path ? 'text-primary' : ''
-                  }`}
-                >
-                  {item.label}
-                </span>
-              </Link>
-            ))}
+            {navItems.map((item) => {
+              if ((item as any).adminOnly && !user?.isAdmin) return null;
+              return (
+                <Link key={item.path} href={item.path} data-testid={`link-nav-${item.label.toLowerCase()}`}>
+                  <span 
+                    className={`hover:text-primary transition-colors cursor-pointer ${
+                      location === item.path ? 'text-primary' : ''
+                    }`}
+                  >
+                    {item.label}
+                  </span>
+                </Link>
+              );
+            })}
           </div>
           
           {user && (

@@ -1,5 +1,6 @@
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { useAuth } from "@/hooks/use-auth";
+import { useLocation } from "wouter";
 import { Header } from "@/components/header";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -26,6 +27,7 @@ import { useToast } from "@/hooks/use-toast";
 export default function ProfilePage() {
   const { user } = useAuth();
   const { toast } = useToast();
+  const [, setLocation] = useLocation();
 
   const { data: userStats, isLoading: statsLoading } = useQuery({
     queryKey: ["/api/users", user?.id],
@@ -236,11 +238,17 @@ export default function ProfilePage() {
         </div>
         
         {/* Created Challenges */}
+        {user?.isAdmin && (
         <Card className="neon-border overflow-hidden" data-testid="created-challenges">
           <CardHeader className="border-b border-border">
             <div className="flex items-center justify-between">
               <CardTitle className="text-lg font-semibold text-primary">My Challenges</CardTitle>
-              <Button size="sm" className="hover-glow" data-testid="button-create-new">
+              <Button 
+                size="sm" 
+                className="hover-glow" 
+                onClick={() => setLocation("/create")}
+                data-testid="button-create-new"
+              >
                 <Plus className="w-4 h-4 mr-1" />
                 Create New
               </Button>
@@ -308,6 +316,7 @@ export default function ProfilePage() {
                               size="sm"
                               variant="ghost"
                               className="text-primary hover:text-secondary"
+                              onClick={() => setLocation(`/challenge/${challenge.id}/edit`)}
                               data-testid={`button-edit-${challenge.id}`}
                             >
                               <Edit className="w-4 h-4" />
@@ -333,7 +342,11 @@ export default function ProfilePage() {
                   <div className="p-8 text-center">
                     <Plus className="w-12 h-12 text-muted-foreground mx-auto mb-4" />
                     <p className="text-muted-foreground">You haven't created any challenges yet.</p>
-                    <Button className="mt-4 hover-glow" data-testid="button-create-first">
+                    <Button 
+                      className="mt-4 hover-glow" 
+                      onClick={() => setLocation("/create")}
+                      data-testid="button-create-first"
+                    >
                       Create Your First Challenge
                     </Button>
                   </div>
@@ -342,6 +355,7 @@ export default function ProfilePage() {
             )}
           </CardContent>
         </Card>
+        )}
       </main>
     </div>
   );

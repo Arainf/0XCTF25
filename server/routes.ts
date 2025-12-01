@@ -1,7 +1,7 @@
 import type { Express } from "express";
 import { createServer, type Server } from "http";
 import { storage } from "./storage";
-import { setupAuth, requireAuth, hashPassword, comparePasswords } from "./auth";
+import { setupAuth, requireAuth, requireAdmin, hashPassword, comparePasswords } from "./auth";
 import multer from "multer";
 import path from "path";
 import { z } from "zod";
@@ -142,7 +142,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
         artifacts
       });
 
-      res.status(201).json(challenge);
+      // Don't expose flag hash/salt
+      const { flagHash, flagSalt, ...sanitizedChallenge } = challenge;
+      res.status(201).json(sanitizedChallenge);
     } catch (error) {
       console.error("Error creating challenge:", error);
       if (error instanceof z.ZodError) {
@@ -152,7 +154,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
-  app.put("/api/challenges/:id", requireAuth, async (req, res) => {
+  app.put("/api/challenges/:id", requireAuth, upload.array('files'), async (req, res) => {
     try {
       const challenge = await storage.getChallenge(req.params.id);
       if (!challenge) {
@@ -164,8 +166,36 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(403).json({ message: "You can only edit your own challenges" });
       }
 
-      const updatedChallenge = await storage.updateChallenge(req.params.id, req.body);
-      res.json(updatedChallenge);
+      const updateData: any = { ...req.body };
+      
+      // If flag is provided, hash it
+      if (req.body.flag && req.body.flag.trim()) {
+        updateData.flagHash = await hashPassword(req.body.flag);
+        delete updateData.flag;
+      } else {
+        delete updateData.flag;
+      }
+
+      // Process hints if provided
+      if (req.body.hints) {
+        try {
+          updateData.hints = typeof req.body.hints === 'string' ? JSON.parse(req.body.hints) : req.body.hints;
+        } catch (e) {
+          // Keep existing hints if parsing fails
+          delete updateData.hints;
+        }
+      }
+
+      // Convert points to number
+      if (req.body.points) {
+        updateData.points = parseInt(req.body.points);
+      }
+
+      const updatedChallenge = await storage.updateChallenge(req.params.id, updateData);
+      
+      // Don't expose flag hash/salt
+      const { flagHash, flagSalt, ...sanitizedChallenge } = updatedChallenge;
+      res.json(sanitizedChallenge);
     } catch (error) {
       console.error("Error updating challenge:", error);
       res.status(500).json({ message: "Failed to update challenge" });
@@ -212,6 +242,11 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(400).json({ message: "Challenge is not published" });
       }
 
+      // Check if challenge has already been solved globally
+      if (challenge.globalSolved) {
+        return res.status(400).json({ message: "This challenge has already been solved by another user and is now locked" });
+      }
+
       // Check if already solved
       const alreadySolved = await storage.hasSolved(userId, challengeId);
       if (alreadySolved) {
@@ -235,10 +270,13 @@ export async function registerRoutes(app: Express): Promise<Server> {
         // Create solve record
         await storage.createSolve(userId, challengeId);
         
+        // Mark challenge as globally solved
+        await storage.updateChallenge(challengeId, { globalSolved: true });
+        
         // Update user score
         await storage.updateUserScore(userId, challenge.points);
 
-        res.json({ correct: true, message: "Congratulations! Flag accepted." });
+        res.json({ correct: true, message: "Congratulations! You're the first to solve this! 🎉" });
       } else {
         res.json({ correct: false, message: "Incorrect flag. Try again!" });
       }
@@ -276,7 +314,14 @@ export async function registerRoutes(app: Express): Promise<Server> {
   app.get("/api/users/:id/challenges", async (req, res) => {
     try {
       const challenges = await storage.getUserChallenges(req.params.id);
-      res.json(challenges);
+      
+      // Don't expose flag hash/salt
+      const sanitizedChallenges = challenges.map(challenge => {
+        const { flagHash, flagSalt, ...rest } = challenge;
+        return rest;
+      });
+      
+      res.json(sanitizedChallenges);
     } catch (error) {
       console.error("Error fetching user challenges:", error);
       res.status(500).json({ message: "Failed to fetch user challenges" });
@@ -302,6 +347,35 @@ export async function registerRoutes(app: Express): Promise<Server> {
     } catch (error) {
       console.error("Error fetching leaderboard:", error);
       res.status(500).json({ message: "Failed to fetch leaderboard" });
+    }
+  });
+
+  // Global statistics
+  app.get("/api/stats", async (req, res) => {
+    try {
+      // Get all published challenges
+      const allChallenges = await storage.getChallenges({ published: true });
+      
+      // Calculate total available points from published challenges
+      const totalAvailablePoints = allChallenges.reduce((sum, challenge) => sum + (challenge.points || 0), 0);
+      
+      // Calculate total solved points (from challenges marked as globalSolved)
+      const solvedChallenges = allChallenges.filter(c => c.globalSolved);
+      const totalSolvedPoints = solvedChallenges.reduce((sum, challenge) => sum + (challenge.points || 0), 0);
+      
+      // Calculate completion percentage
+      const percentComplete = totalAvailablePoints > 0 ? Math.round((totalSolvedPoints / totalAvailablePoints) * 100) : 0;
+      
+      res.json({
+        totalAvailablePoints,
+        totalSolvedPoints,
+        percentComplete,
+        solvedCount: solvedChallenges.length,
+        totalCount: allChallenges.length
+      });
+    } catch (error) {
+      console.error("Error fetching stats:", error);
+      res.status(500).json({ message: "Failed to fetch statistics" });
     }
   });
 
@@ -346,6 +420,54 @@ export async function registerRoutes(app: Express): Promise<Server> {
         res.status(404).json({ message: "File not found" });
       }
     });
+  });
+
+  // Admin routes
+  app.get("/api/admin/challenges", requireAdmin, async (req, res) => {
+    try {
+      // Return all challenges including flagHash for admin use
+      const challenges = await storage.getChallenges({});
+      res.json(challenges);
+    } catch (error) {
+      console.error("Error fetching admin challenges:", error);
+      res.status(500).json({ message: "Failed to fetch admin challenges" });
+    }
+  });
+
+  app.post("/api/admin/challenges/:id/publish", requireAdmin, async (req, res) => {
+    try {
+      const id = req.params.id;
+      await storage.updateChallenge(id, { published: true });
+      res.json({ ok: true });
+    } catch (error) {
+      console.error("Error publishing challenge:", error);
+      res.status(500).json({ message: "Failed to publish challenge" });
+    }
+  });
+
+  app.post("/api/admin/challenges/:id/unpublish", requireAdmin, async (req, res) => {
+    try {
+      const id = req.params.id;
+      await storage.updateChallenge(id, { published: false });
+      res.json({ ok: true });
+    } catch (error) {
+      console.error("Error unpublishing challenge:", error);
+      res.status(500).json({ message: "Failed to unpublish challenge" });
+    }
+  });
+
+  app.post("/api/admin/challenges/:id/answer", requireAdmin, async (req, res) => {
+    try {
+      const id = req.params.id;
+      const { flag } = req.body;
+      if (!flag) return res.status(400).json({ message: "Flag is required" });
+      const flagHash = await hashPassword(flag);
+      await storage.updateChallenge(id, { flagHash });
+      res.json({ ok: true });
+    } catch (error) {
+      console.error("Error updating challenge flag:", error);
+      res.status(500).json({ message: "Failed to update challenge answer" });
+    }
   });
 
   const httpServer = createServer(app);

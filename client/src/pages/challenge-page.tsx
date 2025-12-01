@@ -1,6 +1,6 @@
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { useParams } from "wouter";
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { Header } from "@/components/header";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -16,6 +16,7 @@ export default function ChallengePage() {
   const { id } = useParams();
   const { toast } = useToast();
   const [flagInput, setFlagInput] = useState("");
+  const [parsedChallenge, setParsedChallenge] = useState<any>(null);
 
   const { data: challenge, isLoading } = useQuery({
     queryKey: ["/api/challenges", id],
@@ -26,6 +27,26 @@ export default function ChallengePage() {
     },
     enabled: !!id,
   });
+
+  // Parse hints safely
+  useEffect(() => {
+    if (challenge) {
+      const parsed = { ...challenge };
+      if (parsed.hints) {
+        try {
+          if (typeof parsed.hints === 'string') {
+            parsed.hints = JSON.parse(parsed.hints);
+          }
+        } catch (e) {
+          console.warn('Failed to parse hints:', e);
+          parsed.hints = Array.isArray(parsed.hints) ? parsed.hints : [];
+        }
+      } else {
+        parsed.hints = [];
+      }
+      setParsedChallenge(parsed);
+    }
+  }, [challenge]);
 
   const submitFlagMutation = useMutation({
     mutationFn: async (flag: string) => {
@@ -127,9 +148,9 @@ export default function ChallengePage() {
           <CardHeader>
             <div className="flex items-center justify-between">
               <CardTitle className="text-3xl gradient-text" data-testid="text-challenge-title">
-                {challenge.title}
+                {parsedChallenge?.title}
               </CardTitle>
-              {challenge.hasSolved && (
+              {parsedChallenge?.hasSolved && (
                 <Badge className="bg-green-500 text-black">
                   ✓ SOLVED
                 </Badge>
@@ -138,25 +159,25 @@ export default function ChallengePage() {
             
             <div className="flex items-center gap-4 flex-wrap mt-4">
               <Badge variant="secondary" data-testid="badge-category">
-                {challenge.category}
+                {parsedChallenge?.category}
               </Badge>
               <Badge 
-                className={difficultyColors[challenge.difficulty as keyof typeof difficultyColors] || 'bg-muted'}
+                className={difficultyColors[parsedChallenge?.difficulty as keyof typeof difficultyColors] || 'bg-muted'}
                 data-testid="badge-difficulty"
               >
-                {challenge.difficulty}
+                {parsedChallenge?.difficulty}
               </Badge>
               <span className="text-primary font-bold text-lg" data-testid="text-points">
-                {challenge.points} points
+                {parsedChallenge?.points} points
               </span>
               <div className="flex items-center gap-1 text-muted-foreground">
                 <User className="w-4 h-4" />
-                <span data-testid="text-creator">{challenge.creator?.username}</span>
+                <span data-testid="text-creator">{parsedChallenge?.creator?.username}</span>
               </div>
               <div className="flex items-center gap-1 text-muted-foreground">
                 <Clock className="w-4 h-4" />
                 <span data-testid="text-created">
-                  {new Date(challenge.createdAt).toLocaleDateString()}
+                  {new Date(parsedChallenge?.createdAt).toLocaleDateString()}
                 </span>
               </div>
             </div>
@@ -167,16 +188,16 @@ export default function ChallengePage() {
             <div>
               <h3 className="text-lg font-semibold text-primary mb-3">Description</h3>
               <div className="prose prose-invert max-w-none" data-testid="challenge-description">
-                <ReactMarkdown>{challenge.description}</ReactMarkdown>
+                <ReactMarkdown>{parsedChallenge?.description}</ReactMarkdown>
               </div>
             </div>
             
             {/* Files */}
-            {challenge.artifacts && challenge.artifacts.length > 0 && (
+            {parsedChallenge?.artifacts && parsedChallenge?.artifacts.length > 0 && (
               <div>
                 <h3 className="text-lg font-semibold text-primary mb-3">Files</h3>
                 <div className="space-y-2">
-                  {challenge.artifacts.map((file: any, index: number) => (
+                  {parsedChallenge?.artifacts.map((file: any, index: number) => (
                     <div key={index} className="flex items-center justify-between bg-muted p-3 rounded-md">
                       <div className="flex items-center gap-3">
                         <Download className="w-4 h-4 text-primary" />
@@ -201,7 +222,7 @@ export default function ChallengePage() {
             )}
             
             {/* Flag Submission */}
-            {!challenge.hasSolved && (
+            {!parsedChallenge?.hasSolved && (
               <div>
                 <h3 className="text-lg font-semibold text-primary mb-3">Submit Flag</h3>
                 <div className="flex gap-3">
@@ -231,11 +252,11 @@ export default function ChallengePage() {
             )}
             
             {/* Hints */}
-            {challenge.hints && challenge.hints.length > 0 && (
+            {parsedChallenge?.hints && parsedChallenge?.hints.length > 0 && (
               <div>
                 <h3 className="text-lg font-semibold text-primary mb-3">Hints</h3>
                 <div className="space-y-2">
-                  {challenge.hints.map((hint: any, index: number) => (
+                  {parsedChallenge?.hints.map((hint: any, index: number) => (
                     <div key={index} className="bg-muted p-4 rounded-md border border-border">
                       <div className="flex items-center justify-between mb-2">
                         <span className="text-sm font-medium">Hint {index + 1}</span>
